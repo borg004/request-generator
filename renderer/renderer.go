@@ -73,10 +73,29 @@ func (r Universal) IsZero() bool {
 }
 
 func (r Universal) Validate() error {
+	if r.Record != nil {
+		for _, section := range r.Record.Sections {
+			if section.Resource == nil {
+				continue
+			}
+			if section.Renderer != RendererUniversalSection || len(section.Components) != 0 {
+				return fmt.Errorf("record resource section %q requires universal.section and no display components", section.ID)
+			}
+			if section.Resource.Action != "list" && section.Resource.Action != "view" && section.Resource.Action != "defrec" {
+				return fmt.Errorf("record resource section %q requires a read action", section.ID)
+			}
+			if err := section.Resource.Validate("record resource"); err != nil {
+				return err
+			}
+		}
+	}
 	if r.List != nil && r.ResourceGrid != nil {
 		return fmt.Errorf("renderer.Universal: List and ResourceGrid are mutually exclusive for one list route")
 	}
 	if r.Form != nil {
+		if err := validateFormNavigation(r.Form); err != nil {
+			return err
+		}
 		if err := validateActions("form page", r.Form.Actions); err != nil {
 			return err
 		}
@@ -121,6 +140,9 @@ func (r Universal) Validate() error {
 				}
 			}
 			if err := validateMediaGalleryItems(fmt.Sprintf("form section %q", section.ID), section.MediaItems); err != nil {
+				return err
+			}
+			if err := validateMediaVisibilityStates(fmt.Sprintf("form section %q", section.ID), section.MediaVisibilityStates); err != nil {
 				return err
 			}
 			if section.Collection == nil {
@@ -700,6 +722,25 @@ func validateMediaActions(actions *MediaGalleryActions) error {
 	return nil
 }
 
+func validateMediaVisibilityStates(scope string, states []MediaVisibilityOption) error {
+	seen := make(map[MediaVisibility]struct{}, len(states))
+	for _, state := range states {
+		switch state.Value {
+		case MediaVisibilityPublic, MediaVisibilityPrivate, MediaVisibilityPaid, MediaVisibilityInternal:
+		default:
+			return fmt.Errorf("renderer.Universal: %s media visibility state %q is not a known visibility", scope, state.Value)
+		}
+		if state.Label == "" {
+			return fmt.Errorf("renderer.Universal: %s media visibility state %q must define label", scope, state.Value)
+		}
+		if _, exists := seen[state.Value]; exists {
+			return fmt.Errorf("renderer.Universal: %s media visibility state %q is declared twice", scope, state.Value)
+		}
+		seen[state.Value] = struct{}{}
+	}
+	return nil
+}
+
 func validateMediaGalleryItems(scope string, items []MediaGalleryItem) error {
 	for index := range items {
 		if err := validateActions(fmt.Sprintf("%s media item %q", scope, items[index].ID), items[index].Actions); err != nil {
@@ -1205,6 +1246,7 @@ type CardSchema struct {
 	ActionSize       SizeToken        `json:"action_size,omitempty"`
 	DeleteActionSize SizeToken        `json:"delete_action_size,omitempty"`
 	ActionLayout     CardActionLayout `json:"action_layout,omitempty"`
+	ActionMenuLabel  string           `json:"action_menu_label,omitempty"`
 	PrimaryAction    string           `json:"primary_action,omitempty"`
 	Icon             *IconBinding     `json:"icon,omitempty"`
 	Media            *Media           `json:"media,omitempty"`
@@ -1278,7 +1320,15 @@ type Media struct {
 	GlowFallback string      `json:"glow_fallback,omitempty"`
 	GlowEnabled  *bool       `json:"glow_enabled,omitempty"`
 	StatusField  string      `json:"status_field,omitempty"`
-	Fallback     string      `json:"fallback,omitempty"`
+	// A picture can carry one small mark in its corner - pinned, locked, the
+	// state that belongs to the thing pictured rather than to a row of chips
+	// beside it. MarkerField names the truth, MarkerIcon what to draw.
+	MarkerField string `json:"marker_field,omitempty"`
+	MarkerIcon  string `json:"marker_icon,omitempty"`
+	Fallback    string `json:"fallback,omitempty"`
+	// FallbackField names a value on the record that stands in for a missing
+	// picture, so a card without one can still show what kind of profile it is.
+	FallbackField string `json:"fallback_field,omitempty"`
 }
 
 type FieldPresentation struct {
@@ -1291,11 +1341,19 @@ type FieldPresentation struct {
 	Prefix      string           `json:"prefix,omitempty"`
 	Suffix      string           `json:"suffix,omitempty"`
 	Hint        string           `json:"hint,omitempty"`
+	// Placeholder is the empty-state copy shown inside the control. A rule the
+	// control already enforces - an accepted range, an expected format - belongs
+	// here rather than on a line of its own under the field.
+	Placeholder string           `json:"placeholder,omitempty"`
 	Description string           `json:"description,omitempty"`
 	Rows        uint8            `json:"rows,omitempty"`
 	MaxItems    uint16           `json:"max_items,omitempty"`
 	InputMode   FieldInputMode   `json:"input_mode,omitempty"`
 	VisibleIf   *Condition       `json:"visible_if,omitempty"`
+	// RequiredIf marks the control as required only in the state that needs it.
+	// A profile is filled in over several sittings, so a field that review will
+	// not accept empty is still optional while the profile is a draft.
+	RequiredIf *Condition `json:"required_if,omitempty"`
 	ToneByValue []FieldValueTone `json:"tone_by_value,omitempty"`
 }
 
@@ -1451,6 +1509,10 @@ type StatusBinding struct {
 	Marker     *bool             `json:"marker,omitempty"`
 	OnlineTone string            `json:"online_tone,omitempty"`
 	ToneMap    map[string]string `json:"tone_map,omitempty"`
+	// LabelMap names each state in the reader's language. A list row carries
+	// plain values, so a producer that cannot ship option metadata beside them
+	// states the words here instead of leaving the raw value on the card.
+	LabelMap map[string]string `json:"label_map,omitempty"`
 }
 
 type Badge struct {
@@ -1484,15 +1546,49 @@ type BadgeState struct {
 }
 
 type FormPage struct {
-	ID       string                 `json:"id,omitempty"`
-	Title    string                 `json:"title,omitempty"`
-	Subtitle string                 `json:"subtitle,omitempty"`
-	Layout   LayoutType             `json:"layout,omitempty"`
-	Workflow *FormWorkflow          `json:"workflow,omitempty"`
-	Actions  []Action               `json:"actions,omitempty"`
-	Sections []FormSection          `json:"sections,omitempty"`
-	Fields   []string               `json:"fields,omitempty"`
-	Context  map[string]interface{} `json:"context,omitempty"`
+	Navigation *FormNavigation        `json:"navigation,omitempty"`
+	ID         string                 `json:"id,omitempty"`
+	Title      string                 `json:"title,omitempty"`
+	Subtitle   string                 `json:"subtitle,omitempty"`
+	Layout     LayoutType             `json:"layout,omitempty"`
+	Workflow   *FormWorkflow          `json:"workflow,omitempty"`
+	Actions    []Action               `json:"actions,omitempty"`
+	Sections   []FormSection          `json:"sections,omitempty"`
+	Fields     []string               `json:"fields,omitempty"`
+	Context    map[string]interface{} `json:"context,omitempty"`
+}
+
+// FormNavigation opts a form into section tabs without changing field ownership
+// or submit behavior. Omission preserves the existing section navigation.
+type FormNavigation struct {
+	Presentation FormNavigationPresentation `json:"presentation"`
+}
+
+type FormNavigationPresentation string
+
+const FormNavigationPresentationTabs FormNavigationPresentation = "tabs"
+
+func validateFormNavigation(page *FormPage) error {
+	if page.Navigation == nil {
+		return nil
+	}
+	if page.Navigation.Presentation != FormNavigationPresentationTabs {
+		return fmt.Errorf("renderer.FormNavigation: unsupported presentation %q", page.Navigation.Presentation)
+	}
+	if page.Workflow != nil {
+		return fmt.Errorf("renderer.FormNavigation: tabs and workflow are mutually exclusive")
+	}
+	seen := map[string]bool{}
+	for _, section := range page.Sections {
+		if section.ID == "" || seen[section.ID] {
+			return fmt.Errorf("renderer.FormNavigation: tabs require unique nonempty section IDs")
+		}
+		seen[section.ID] = true
+	}
+	if len(seen) == 0 {
+		return fmt.Errorf("renderer.FormNavigation: tabs require sections")
+	}
+	return nil
 }
 
 // FormWorkflow selects the generic step-based form presentation. Steps are
@@ -1596,6 +1692,11 @@ type FormSection struct {
 	MediaItems   []MediaGalleryItem     `json:"media_items,omitempty"`
 	MediaLabels  *MediaGalleryLabels    `json:"media_labels,omitempty"`
 	MediaActions *MediaGalleryActions   `json:"media_actions,omitempty"`
+	// MediaVisibilityStates are the states an item of this gallery can be
+	// moved between. A gallery that declares none is read-only in that
+	// respect, as every gallery was before.
+	MediaVisibilityStates []MediaVisibilityOption `json:"media_visibility_states,omitempty"`
+	MediaPresets *MediaPresetsConfig    `json:"media_presets,omitempty"`
 	Prompts      *PromptList            `json:"prompts,omitempty"`
 	DateRange    *DateRangeConfig       `json:"date_range,omitempty"`
 	// Resource declares another standard module action rendered inside this
@@ -1604,6 +1705,10 @@ type FormSection struct {
 	// Load is the generated executable request for Resource. Consumers never
 	// construct endpoints or bindings for a resource section.
 	Load *ResourceLoad `json:"load,omitempty"`
+	// Sections are blocks that belong to this one. A page that answers several
+	// questions at once - rates, services, work mode - is still one place to
+	// visit, and each block keeps the renderer it needs.
+	Sections []FormSection `json:"sections,omitempty"`
 }
 
 // DateRangeConfig presents two ordinary form fields as one range control. It
@@ -1875,6 +1980,17 @@ type MediaUploadConfig struct {
 	Multiple     bool   `json:"multiple"`
 }
 
+// MediaPresetsConfig offers a gallery a set of ready-made pictures to start
+// from. The producer decides whether the offer is made and what it is called;
+// the pictures themselves belong to the application that serves them.
+type MediaPresetsConfig struct {
+	Title     string `json:"title,omitempty"`
+	Subtitle  string `json:"subtitle,omitempty"`
+	ShowLabel string `json:"show_label,omitempty"`
+	HideLabel string `json:"hide_label,omitempty"`
+	AddLabel  string `json:"add_label,omitempty"`
+}
+
 type MediaGalleryItem struct {
 	ID              string          `json:"id,omitempty"`
 	MediaID         int64           `json:"media_id,omitempty"`
@@ -1909,6 +2025,27 @@ type MediaGalleryLabels struct {
 	PrivateHint  string `json:"private_hint,omitempty"`
 	HideFace     string `json:"hide_face,omitempty"`
 	HideFaceHint string `json:"hide_face_hint,omitempty"`
+	// A gallery large enough to be a page of its own is read in parts. These
+	// name the parts; a consumer that is given none of them shows the gallery
+	// whole, as before.
+	FilterAll     string `json:"filter_all,omitempty"`
+	FilterPublic  string `json:"filter_public,omitempty"`
+	FilterPrivate string `json:"filter_private,omitempty"`
+	FilterHidden  string `json:"filter_hidden,omitempty"`
+	FilterVideo   string `json:"filter_video,omitempty"`
+	Hidden        string `json:"hidden,omitempty"`
+	HiddenHint    string `json:"hidden_hint,omitempty"`
+}
+
+// MediaVisibilityOption names one state a gallery item can be in and says who
+// that state opens the item to. A consumer offers exactly the states it is
+// given: which of them exist, what they are called and who they are for is the
+// producer's policy, never the browser's guess.
+type MediaVisibilityOption struct {
+	Value MediaVisibility `json:"value"`
+	Label string          `json:"label,omitempty"`
+	Icon  string          `json:"icon,omitempty"`
+	Hint  string          `json:"hint,omitempty"`
 }
 
 type MediaGalleryActions struct {
@@ -2107,6 +2244,10 @@ type DisplayComponent struct {
 	Align               AlignToken               `json:"align,omitempty"`
 	Inset               InsetToken               `json:"inset,omitempty"`
 	Compact             bool                     `json:"compact,omitempty"`
+	// ShowEmpty keeps a block's declared fields on screen even when the record
+	// has no value for them yet. A page meant to be filled in reads as a frame
+	// with blanks rather than as whatever happens to be filled already.
+	ShowEmpty           bool                     `json:"show_empty,omitempty"`
 	Columns             int                      `json:"columns,omitempty"`
 	ReadonlyColumns     int                      `json:"readonly_columns,omitempty"`
 	DisplayType         ComponentDisplayType     `json:"display_type,omitempty"`
@@ -2178,6 +2319,11 @@ type RecordTheme struct {
 }
 
 type RecordSection struct {
+	// Resource is server-only; Load is resolved with the requesting role's permissions.
+	Resource      *Resource             `json:"-"`
+	Load          *ResourceLoad         `json:"load,omitempty"`
+	LoadingLabel  string                `json:"loading_label,omitempty"`
+	RetryLabel    string                `json:"retry_label,omitempty"`
 	ID            string                `json:"id,omitempty"`
 	Title         string                `json:"title,omitempty"`
 	TitleFallback string                `json:"title_fallback,omitempty"`
@@ -2240,6 +2386,10 @@ type ActionPresentation struct {
 	Placement        ActionPlacement  `json:"placement,omitempty"`
 	ActiveAppearance ActionAppearance `json:"active_appearance,omitempty"`
 	Active           string           `json:"active,omitempty"`
+	// ActiveIf marks the action as the current choice. Active names a truthy
+	// field, which cannot express "this option equals the record's value", so a
+	// set of mutually exclusive actions states the match as a condition.
+	ActiveIf *Condition `json:"active_if,omitempty"`
 	Block            *bool            `json:"block,omitempty"`
 	VisibleIf        *Condition       `json:"visible_if,omitempty"`
 	HiddenIf         *Condition       `json:"hidden_if,omitempty"`
@@ -2258,6 +2408,9 @@ func (presentation ActionPresentation) Validate() error {
 	}
 	if presentation.DisabledIf != nil && !hasCondition(presentation.DisabledIf) {
 		return fmt.Errorf("disabled_if is invalid")
+	}
+	if presentation.ActiveIf != nil && !hasCondition(presentation.ActiveIf) {
+		return fmt.Errorf("active_if is invalid")
 	}
 	return nil
 }

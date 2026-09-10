@@ -44,6 +44,7 @@ func LocalizeGlobalWidget(widget GlobalWidget, resolve TextResolver) GlobalWidge
 	if localized.Workspace == nil {
 		return localized
 	}
+	localized.Workspace.Selection.MultiLabel = resolve(localized.Workspace.Selection.MultiLabel, "")
 	for index := range localized.Workspace.Commands {
 		localized.Workspace.Commands[index].Label = resolve(localized.Workspace.Commands[index].Label, "")
 		if confirm := localized.Workspace.Commands[index].Confirm; confirm != nil {
@@ -303,6 +304,10 @@ type WorkspaceSelection struct {
 	// Field identifies the current master row. Bindings may read this field or
 	// another declared scalar field from that same selected row.
 	Field string `json:"field"`
+	// MultiLabel names what is being picked while several rows are selected
+	// for a multi command. It is a producer translation key and may carry a
+	// {count} placeholder for the number of rows picked so far.
+	MultiLabel string `json:"multi_label,omitempty"`
 }
 
 // ActionResource is a reference to an existing standard module action.
@@ -367,6 +372,10 @@ type WorkspaceCommand struct {
 	// row. It defaults to true. A false value is valid only for commands whose
 	// bindings do not read the selection runtime scope.
 	RequireSelection *bool `json:"require_selection,omitempty"`
+	// Multi says the command may be applied to several master rows at once.
+	// The renderer offers a selection of rows and runs the command for each of
+	// them; a row the command is not visible for is not offered.
+	Multi bool `json:"multi,omitempty"`
 	Resource
 	Refresh []WorkspaceRefreshTarget `json:"refresh"`
 }
@@ -383,6 +392,14 @@ func (command WorkspaceCommand) Validate() error {
 	}
 	if command.Trigger != "" && command.Input != nil {
 		return fmt.Errorf("triggered command must not declare input")
+	}
+	// Several rows cannot answer one form, and a command the workspace starts
+	// by itself is never applied to a selection of rows.
+	if command.Multi && (command.Input != nil || command.Trigger != "") {
+		return fmt.Errorf("multi command must not declare input or trigger")
+	}
+	if command.Multi && command.RequireSelection != nil && !*command.RequireSelection {
+		return fmt.Errorf("multi command requires selection")
 	}
 	if command.Trigger == WorkspaceCommandTriggerSelectionOpen && command.RequireSelection != nil && !*command.RequireSelection {
 		return fmt.Errorf("selection_open trigger requires selection")

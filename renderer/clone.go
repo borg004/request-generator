@@ -45,6 +45,10 @@ func cloneFormPage(v *FormPage) *FormPage {
 	}
 	cp := *v
 	cp.Workflow = cloneFormWorkflow(v.Workflow)
+	if v.Navigation != nil {
+		navigation := *v.Navigation
+		cp.Navigation = &navigation
+	}
 	cp.Actions = cloneActions(v.Actions)
 	cp.Sections = cloneFormSections(v.Sections)
 	cp.Fields = cloneSlice(v.Fields)
@@ -415,6 +419,7 @@ func cloneStatusBinding(v *StatusBinding) *StatusBinding {
 	cp := *v
 	cp.Marker = clonePtr(v.Marker)
 	cp.ToneMap = cloneMap(v.ToneMap)
+	cp.LabelMap = cloneMap(v.LabelMap)
 	return &cp
 }
 
@@ -500,6 +505,7 @@ func CloneFieldPresentation(v *FieldPresentation) *FieldPresentation {
 	}
 	cp := *v
 	cp.VisibleIf = cloneCondition(v.VisibleIf)
+	cp.RequiredIf = cloneCondition(v.RequiredIf)
 	cp.ToneByValue = cloneSlice(v.ToneByValue)
 	return &cp
 }
@@ -617,6 +623,8 @@ func cloneRecordSections(values []RecordSection) []RecordSection {
 	out := make([]RecordSection, len(values))
 	for i, v := range values {
 		out[i] = v
+		out[i].Resource = cloneResource(v.Resource)
+		out[i].Load = cloneResourceLoad(v.Load)
 		out[i].Block = cloneBlock(v.Block)
 		out[i].Stack = cloneStack(v.Stack)
 		out[i].Components = cloneDisplayComponents(v.Components)
@@ -769,6 +777,7 @@ func cloneActionPresentation(value ActionPresentation) ActionPresentation {
 	cloned.VisibleIf = cloneCondition(value.VisibleIf)
 	cloned.HiddenIf = cloneCondition(value.HiddenIf)
 	cloned.DisabledIf = cloneCondition(value.DisabledIf)
+	cloned.ActiveIf = cloneCondition(value.ActiveIf)
 	return cloned
 }
 
