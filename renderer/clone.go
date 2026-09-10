@@ -636,6 +636,7 @@ func cloneBlock(v *Block) *Block {
 	}
 	cp := *v
 	cp.Overlays = cloneBlockOverlays(v.Overlays)
+	cp.Decoration = cloneDecoration(v.Decoration)
 	return &cp
 }
 
@@ -661,6 +662,7 @@ func cloneDisplayComponents(values []DisplayComponent) []DisplayComponent {
 		out[i].Fields = cloneSlice(v.Fields)
 		out[i].Items = cloneSlice(v.Items)
 		out[i].CollectionGroups = cloneDisplayCollectionGroups(v.CollectionGroups)
+		out[i].Decoration = cloneDecoration(v.Decoration)
 		out[i].Block = cloneBlock(v.Block)
 		if v.Visible != nil {
 			visible := *v.Visible

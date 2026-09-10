@@ -238,6 +238,12 @@ func recordPageHasAction(page *RecordPage, id string) bool {
 }
 
 func (component DisplayComponent) Validate() error {
+	if err := component.Decoration.Validate(); err != nil {
+		return err
+	}
+	if component.Decoration != nil && (component.Type != DisplayDataList || component.Size != SizeLG) {
+		return fmt.Errorf("decoration requires a large data_list component")
+	}
 	if err := validateMediaGalleryItems(fmt.Sprintf("display component %q", component.ID), component.MediaItems); err != nil {
 		return err
 	}
@@ -302,6 +308,9 @@ func (component DisplayComponent) Validate() error {
 func (block *Block) Validate() error {
 	if block == nil {
 		return nil
+	}
+	if err := block.Decoration.Validate(); err != nil {
+		return err
 	}
 	seen := make(map[MediaOverlayPosition]struct{}, len(block.Overlays))
 	for _, overlay := range block.Overlays {
@@ -2102,6 +2111,7 @@ type CollectionModal struct {
 }
 
 type Block struct {
+	Decoration     *Decoration     `json:"decoration,omitempty"`
 	Type           BlockType       `json:"type,omitempty"`
 	Variant        BlockVariant    `json:"variant,omitempty"`
 	TitleDecor     TitleDecorToken `json:"title_decor,omitempty"`
@@ -2136,6 +2146,7 @@ type Stack struct {
 }
 
 type DisplayComponent struct {
+	Decoration          *Decoration              `json:"decoration,omitempty"`
 	ID                  string                   `json:"id,omitempty"`
 	Type                DisplayComponentType     `json:"type,omitempty"`
 	ActionID            string                   `json:"action_id,omitempty"`
