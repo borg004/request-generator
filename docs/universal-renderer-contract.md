@@ -2396,6 +2396,19 @@ enable it; deploy the supporting kit and asset resolver with the producer.
 
 `record_page` описывает страницу просмотра записи. В Go API это `renderer.Universal.Record`.
 
+Optional `record_page.hint` describes dismissible explanatory content:
+`{key, title, text, acknowledge, close, icon}`. All fields are optional. Display
+strings are localized, key/icon are not. A nonempty key must not contain control
+characters or surrounding whitespace. Consumers persist dismissal only through
+their injected storage adapter; without key/adapter dismissal is session-local.
+Clones own independent hint objects. Omission preserves existing behavior.
+Record actions with the existing `placement: head` render at the page header;
+there is no `header` placement alias.
+
+`TextBinding.format: short_date` accepts an ISO timestamp and formats day + short
+month using the consumer's locale and timezone. The producer must send the time,
+not a preformatted date string. Invalid dates remain unchanged.
+
 ```json
 {
   "record_page": {

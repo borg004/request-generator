@@ -78,6 +78,7 @@ func cloneRecordPage(v *RecordPage) *RecordPage {
 		return nil
 	}
 	cp := *v
+	cp.Hint = clonePtr(v.Hint)
 	cp.ShowHeader = clonePtr(v.ShowHeader)
 	cp.Navigation = cloneRecordNavigation(v.Navigation)
 	cp.Layout = cloneLayout(v.Layout)
