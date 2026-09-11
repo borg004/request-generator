@@ -43,6 +43,9 @@ type Generator struct {
 	IconMap              map[string]string
 	Realtime             RealtimeConfig
 	realtimeHub          *realtimeHub
+	// AccessGate lets the application close a destination for the current
+	// actor without removing it from the configuration.
+	AccessGate AccessGate
 }
 
 func NewGenerator(
@@ -806,6 +809,7 @@ func (generator *Generator) actionList(module *BaseModule, action actions.ListMo
 			Heads            map[string]interface{}              `json:"heads"`
 			Filters          map[string]fields.ModuleFilterField `json:"filters,omitempty"`
 			Sort             []actions.SortResponseItem          `json:"sort,omitempty"`
+			SortActive       *actions.SortActiveResponse         `json:"sort_active,omitempty"`
 		}{
 			Count:            count,
 			Size:             size,
@@ -817,6 +821,7 @@ func (generator *Generator) actionList(module *BaseModule, action actions.ListMo
 			Heads:            heads,
 			Filters:          responseFilters,
 			Sort:             sortOptions,
+			SortActive:       activeSortResponse(activeSort),
 		}
 
 		if isCSV == 0 {
@@ -869,6 +874,19 @@ func (generator *Generator) actionList(module *BaseModule, action actions.ListMo
 	}
 }
 
+// activeSortResponse reports the order the rows were served in. Nothing is
+// reported when the action does not sort at all.
+func activeSortResponse(sort *actions.SortOption) *actions.SortActiveResponse {
+	if sort == nil || sort.Column == nil {
+		return nil
+	}
+	direction := "asc"
+	if sort.Direction == actions.SortDESC {
+		direction = "desc"
+	}
+	return &actions.SortActiveResponse{Field: sort.Column.Name(), Direction: direction}
+}
+
 func (generator *Generator) actionAdd(module *BaseModule, action actions.AddModuleAction) func(c *gin.Context) {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
@@ -901,6 +919,11 @@ func (generator *Generator) actionAdd(module *BaseModule, action actions.AddModu
 				return
 			}
 			if c.Writer.Written() {
+				// A hook that answered the request has already committed its own
+				// work, and the realtime events it queued belong to that work.
+				// Returning without publishing them left every such change
+				// silent for everyone else watching.
+				generator.publishRealtime(c, module, actions.ModuleActionNameAdd, nil)
 				return
 			}
 		}
@@ -1101,6 +1124,11 @@ func (generator *Generator) actionDefrec(module *BaseModule) func(c *gin.Context
 				}
 			}
 
+			if field.TitleFunc != nil {
+				if title := field.TitleFunc(c); title != "" {
+					field.Title = title
+				}
+			}
 			field.Title = generator.Translate(lang, field.Title)
 			field.Options = optionItems
 			field.Check = checkItems
@@ -1523,6 +1551,11 @@ func (generator *Generator) actionUpdate(module *BaseModule, action actions.Upda
 					}
 				}
 
+				// A field whose projection depends on the caller has to be
+				// resolved here too: the record returned after an update is
+				// read with the same expressions a view is.
+				viewFields = fields.ResolveProjections(c, viewFields)
+
 				viewJoins := viewAction.Join
 				if roleJoins := actions.ResolveRoleJoin(module.RoleJoin, role); roleJoins != nil {
 					viewJoins = append(roleJoins, viewJoins...)
@@ -1539,7 +1572,7 @@ func (generator *Generator) actionUpdate(module *BaseModule, action actions.Upda
 		}
 
 		// Fallback: re-fetch with update columns
-		fallbackResult, fallbackErr := generator.db(module).View(l, module.Table, module.PrimaryKey, realFields, where, nil, tc)
+		fallbackResult, fallbackErr := generator.db(module).View(l, module.Table, module.PrimaryKey, fields.ResolveProjections(c, realFields), where, nil, tc)
 		if fallbackErr != nil {
 			response.ErrorResponse(l, c, http.StatusBadRequest, GeneratorErrorUpdate, nil)
 			return

@@ -42,6 +42,10 @@ type ConfigNavigationEntry struct {
 	Group       string                 `json:"group,omitempty"`
 	GroupTitle  string                 `json:"group_title,omitempty"`
 	Query       map[string]interface{} `json:"query,omitempty"`
+	// A destination can exist for an actor and still be closed to them right
+	// now. The entry stays in the menu and says so instead of disappearing.
+	Locked     bool   `json:"locked,omitempty"`
+	LockReason string `json:"lock_reason,omitempty"`
 }
 
 type NavigationPageTarget struct {
@@ -55,12 +59,25 @@ type NavigationPageTarget struct {
 }
 
 type ConfigWidget struct {
-	ID       string                `json:"id"`
-	Order    int                   `json:"order,omitempty"`
-	Renderer renderer.Identity     `json:"renderer"`
-	Widget   renderer.GlobalWidget `json:"widget"`
-	Load     renderer.WidgetLoad   `json:"load"`
+	ID         string                `json:"id"`
+	Order      int                   `json:"order,omitempty"`
+	Renderer   renderer.Identity     `json:"renderer"`
+	Widget     renderer.GlobalWidget `json:"widget"`
+	Load       renderer.WidgetLoad   `json:"load"`
+	Locked     bool                  `json:"locked,omitempty"`
+	LockReason string                `json:"lock_reason,omitempty"`
 }
+
+// AccessTarget names what an access gate is being asked about.
+type AccessTarget struct {
+	Kind string
+	ID   string
+	Path string
+}
+
+// AccessGate answers whether a destination is closed to the current actor and
+// why. It is owned by the application: the generator only asks.
+type AccessGate func(c *gin.Context, target AccessTarget) (bool, string)
 
 // RouteConfig конфигурирует маршрут
 type RouteConfig struct {
@@ -234,6 +251,9 @@ func (generator *Generator) buildNavigation(c *gin.Context, role string, lang lo
 			if titleKey, ok := generator.GroupTitles[entry.Group]; ok {
 				configEntry.GroupTitle = generator.Translate(lang, titleKey)
 			}
+			if generator.AccessGate != nil {
+				configEntry.Locked, configEntry.LockReason = generator.AccessGate(c, AccessTarget{Kind: "navigation", ID: configEntry.ID, Path: configEntry.Path})
+			}
 			result = append(result, configEntry)
 		}
 	}
@@ -390,6 +410,9 @@ func (generator *Generator) buildWidgets(c *gin.Context, role string) ([]ConfigW
 				return nil, err
 			}
 			if available {
+				if generator.AccessGate != nil {
+					config.Locked, config.LockReason = generator.AccessGate(c, AccessTarget{Kind: "widget", ID: config.ID})
+				}
 				result = append(result, config)
 			}
 		}
@@ -400,6 +423,9 @@ func (generator *Generator) buildWidgets(c *gin.Context, role string) ([]ConfigW
 				return nil, err
 			}
 			if available {
+				if generator.AccessGate != nil {
+					config.Locked, config.LockReason = generator.AccessGate(c, AccessTarget{Kind: "widget", ID: config.ID})
+				}
 				result = append(result, config)
 			}
 		}
@@ -630,28 +656,46 @@ func (generator *Generator) resolveFormSectionResources(c *gin.Context, render *
 		return nil
 	}
 
-	sections := make([]renderer.FormSection, 0, len(render.Form.Sections))
-	for _, section := range render.Form.Sections {
+	sections, err := generator.resolveFormSections(c, render.Form.Sections, role)
+	if err != nil {
+		return err
+	}
+	render.Form.Sections = sections
+	return nil
+}
+
+// resolveFormSections resolves a list of form sections and the blocks nested
+// inside them, so a section that owns child blocks is served the same way.
+func (generator *Generator) resolveFormSections(c *gin.Context, source []renderer.FormSection, role actions.Role) ([]renderer.FormSection, error) {
+	sections := make([]renderer.FormSection, 0, len(source))
+	for _, section := range source {
+		if len(section.Sections) > 0 {
+			children, err := generator.resolveFormSections(c, section.Sections, role)
+			if err != nil {
+				return nil, err
+			}
+			section.Sections = children
+		}
 		if section.Resource != nil {
 			if section.Resource.Action != string(actions.ModuleActionNameView) {
-				return fmt.Errorf("form section %q resource action must be view", section.ID)
+				return nil, fmt.Errorf("form section %q resource action must be view", section.ID)
 			}
 
 			targetModule, ok := generator.moduleByName(section.Resource.Module)
 			if !ok {
-				return fmt.Errorf("form section %q resource references unknown module %q", section.ID, section.Resource.Module)
+				return nil, fmt.Errorf("form section %q resource references unknown module %q", section.ID, section.Resource.Module)
 			}
 			targetRender, err := targetModule.RenderFor(c)
 			if err != nil {
-				return fmt.Errorf("form section %q resource render: %w", section.ID, err)
+				return nil, fmt.Errorf("form section %q resource render: %w", section.ID, err)
 			}
 			if targetRender.Form == nil {
-				return fmt.Errorf("form section %q resource %q must render a form", section.ID, section.Resource.Module)
+				return nil, fmt.Errorf("form section %q resource %q must render a form", section.ID, section.Resource.Module)
 			}
 
 			load, available, err := generator.buildReferencedResourceLoad(c, *section.Resource, string(role), nil)
 			if err != nil {
-				return fmt.Errorf("form section %q resource: %w", section.ID, err)
+				return nil, fmt.Errorf("form section %q resource: %w", section.ID, err)
 			}
 			if !available {
 				continue
@@ -660,12 +704,11 @@ func (generator *Generator) resolveFormSectionResources(c *gin.Context, render *
 		}
 
 		if err := generator.resolveFieldMatrixSource(c, &section, role); err != nil {
-			return err
+			return nil, err
 		}
 		sections = append(sections, section)
 	}
-	render.Form.Sections = sections
-	return nil
+	return sections, nil
 }
 
 func (generator *Generator) resolveFieldMatrixSource(c *gin.Context, section *renderer.FormSection, role actions.Role) error {

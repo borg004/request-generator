@@ -419,6 +419,7 @@ func cloneStatusBinding(v *StatusBinding) *StatusBinding {
 	cp := *v
 	cp.Marker = clonePtr(v.Marker)
 	cp.ToneMap = cloneMap(v.ToneMap)
+	cp.LabelMap = cloneMap(v.LabelMap)
 	return &cp
 }
 
@@ -504,6 +505,7 @@ func CloneFieldPresentation(v *FieldPresentation) *FieldPresentation {
 	}
 	cp := *v
 	cp.VisibleIf = cloneCondition(v.VisibleIf)
+	cp.RequiredIf = cloneCondition(v.RequiredIf)
 	cp.ToneByValue = cloneSlice(v.ToneByValue)
 	return &cp
 }
@@ -777,6 +779,7 @@ func cloneActionPresentation(value ActionPresentation) ActionPresentation {
 	cloned.VisibleIf = cloneCondition(value.VisibleIf)
 	cloned.HiddenIf = cloneCondition(value.HiddenIf)
 	cloned.DisabledIf = cloneCondition(value.DisabledIf)
+	cloned.ActiveIf = cloneCondition(value.ActiveIf)
 	return cloned
 }
 
